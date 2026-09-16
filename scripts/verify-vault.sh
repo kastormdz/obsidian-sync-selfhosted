@@ -82,15 +82,66 @@ ult = sorted(r.get("Contents", []), key=lambda o: o["LastModified"])[-1]
 age_h = (datetime.now(timezone.utc) - ult["LastModified"]).total_seconds() / 3600
 snap = sorted(p["Prefix"] for p in s3.list_objects_v2(
     Bucket=bucket, Prefix=f"{prefix}/notes/", Delimiter="/").get("CommonPrefixes", []))[-1]
-n = sum(p.get("KeyCount", 0) for p in s3.get_paginator("list_objects_v2").paginate(
-    Bucket=bucket, Prefix=snap))
-print(f"{n} {age_h:.1f}")
+snap_n = snap_b = 0
+for pg in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=snap):
+    for o in pg.get("Contents", []):
+        snap_n += 1
+        snap_b += o["Size"]
+
+# El vault VIVO, indexado desde CouchDB: la fuente de verdad. Comparar el snapshot
+# contra esto es lo que detecta un backup incompleto o truncado (antes solo se
+# verificaba "que haya algo", así que un backup al 50% pasaba como OK).
+live_n = live_b = -1
+try:
+    import base64 as b64, json as js, re as rex, subprocess as sp, urllib.request as ur
+    envs = sp.run(["docker", "inspect", os.environ.get("OBSIDIAN_MCP_CONTAINER", "obsidian-mcp"),
+                   "--format", "{{range .Config.Env}}{{println .}}{{end}}"],
+                  capture_output=True, text=True, timeout=15).stdout
+    curl = next((l.split("=", 1)[1] for l in envs.splitlines() if l.startswith("COUCHDB_URL=")), "")
+    m = rex.match(r"^(https?://)(?:([^:@/]+):([^@/]*)@)?(.+)$", curl.strip())
+    scheme, u, pw, host = m.groups()
+    # host.docker.internal solo resuelve dentro de Docker; desde el host es 127.0.0.1
+    host = host.replace("host.docker.internal", "127.0.0.1")
+    hdr = {"Authorization": "Basic " + b64.b64encode(f"{u}:{pw}".encode()).decode(),
+           "Content-Type": "application/json"}
+    def call(path, body=None):
+        req = ur.Request(f"{scheme}{host}/{path}",
+                         data=js.dumps(body).encode() if body else None,
+                         headers=hdr, method="POST" if body else "GET")
+        with ur.urlopen(req, timeout=60) as rr:
+            return js.load(rr)
+    ids = [x["id"] for x in call("obsidian/_all_docs")["rows"]]
+    cand = [i for i in ids if not i.startswith(("h:", "_"))]
+    live_n = live_b = 0
+    for i in range(0, len(cand), 200):
+        for row in call("obsidian/_all_docs?include_docs=true", {"keys": cand[i:i + 200]})["rows"]:
+            d = row.get("doc") or {}
+            if d.get("path") and not d.get("deleted"):
+                live_n += 1
+                live_b += d.get("size") or 0
+except Exception:
+    pass
+print(f"{live_n} {live_b} {snap_n} {snap_b} {age_h:.1f}")
 PY
 )"
 if [ -n "$NOTAS" ]; then
   set -- $NOTAS
-  N="$1"; AGE="$2"
-  if [ "${N:-0}" -lt "$MIN_NOTES" ]; then bad "el último snapshot tiene $N notas"; else ok "último snapshot: $N notas"; fi
+  LIVE_N="$1"; LIVE_B="$2"; SNAP_N="$3"; SNAP_B="$4"; AGE="$5"
+  if [ "${LIVE_N:-0}" -gt 0 ]; then
+    if [ "${SNAP_N:-0}" -eq "${LIVE_N}" ]; then
+      ok "backup completo: $SNAP_N archivos = los $LIVE_N del vault"
+    else
+      bad "el snapshot tiene $SNAP_N archivos pero el vault tiene $LIVE_N (faltan $((LIVE_N-SNAP_N)))"
+    fi
+    if python3 -c "import sys;sys.exit(0 if float(${SNAP_B:-0}) >= float(${LIVE_B:-1})*0.9 else 1)"; then
+      ok "tamaño consistente ($((SNAP_B/1024)) KB vs $((LIVE_B/1024)) KB del vault)"
+    else
+      bad "backup TRUNCADO: $((SNAP_B/1024)) KB vs $((LIVE_B/1024)) KB del vault"
+    fi
+  else
+    warn "no pude indexar el vault desde CouchDB (¿contenedor del MCP arriba?) · snapshot: ${SNAP_N:-?} archivos"
+    [ "${SNAP_N:-0}" -lt "$MIN_NOTES" ] && bad "el snapshot tiene ${SNAP_N:-0} archivos"
+  fi
   if python3 -c "import sys;sys.exit(0 if float('${AGE:-999}') <= $MAX_AGE_H else 1)"; then ok "backup de hace ${AGE} h"; else bad "backup viejo: ${AGE} h"; fi
 else warn "no pude consultar S3 (¿boto3? ¿$SECRETS?)"; fi
 

@@ -84,7 +84,7 @@ curl -s -u "$USER:$PASS" http://127.0.0.1:5984/_node/_local/_config/cors/origins
 
 ## Dimensionamiento
 
-En el vault de referencia (137 notas):
+En el vault de referencia (140 archivos vivos):
 
 | Métrica | Valor |
 |---|---|

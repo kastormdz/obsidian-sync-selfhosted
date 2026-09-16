@@ -15,7 +15,7 @@ Números reales de la base (los que importan para dimensionar):
 
 | Métrica | Valor |
 |---|---|
-| Notas | 137 |
+| Archivos vivos | 140 (136 notas `.md` · 2 PDFs · 2 notas sin extensión) |
 | Documentos totales | ~6.950 (≈50 docs CRDT por nota) |
 | Tamaño en disco | ~10 MB (7,5 MB activos) |
 | Revisión máxima observada | 77 (`00-INDEX.md`) |

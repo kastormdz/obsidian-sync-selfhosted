@@ -2,7 +2,7 @@
 
 Sincronización en tiempo real de un vault de Obsidian, auto-gestionada: **CouchDB + Self-hosted LiveSync**, más un **servidor MCP** para que un agente de IA (Hermes) lea y escriba notas con RAG, y **respaldos automáticos** a S3.
 
-> **Estado verificado:** 2026-09-16 sobre el despliegue real (CouchDB 3.5.2, 137 notas).
+> **Estado verificado:** 2026-09-16 sobre el despliegue real (CouchDB 3.5.2, 140 archivos vivos).
 > Este README describe **lo que está corriendo**, no lo que nos gustaría que corra. Lo que no está
 > verificado se dice explícitamente.
 

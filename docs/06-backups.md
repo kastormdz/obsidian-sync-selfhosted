@@ -54,7 +54,8 @@ print("tamaño:", ult["Size"], "bytes")
 EOF
 ```
 
-Criterio de salud: el último snapshot debe tener **todas** las notas del vault (137 al 2026-09-16) y
+Criterio de salud: el último snapshot debe tener **todos** los archivos vivos del vault (140 al
+2026-09-16: 136 notas `.md` + 2 PDFs + 2 notas sin extensión) y
 ser de las últimas 24 h. `scripts/verify-vault.sh` hace esta comprobación junto con el resto.
 
 ## Restore
@@ -81,6 +82,48 @@ Casos:
 | Se perdieron notas puntuales | Bajar solo esos `.md` del snapshot más reciente que las tenga |
 | Se perdió todo el vault | Restore completo del último snapshot + reconfigurar LiveSync en los dispositivos |
 | Se perdió la passphrase E2E | **El backup de S3 sirve** (está en claro); la copia de CouchDB no |
+
+## Dos fallas silenciosas que tuvo este backup (corregidas 2026-09-16)
+
+Durante meses el backup reportó `137/137 notas ✅` con exit code 0 mientras **perdía la mitad del
+contenido**. Vale como caso de estudio porque las dos fallas eran invisibles desde afuera:
+
+| Falla | Causa raíz | Efecto |
+|---|---|---|
+| **Truncamiento** | El script leía cada nota con el **CLI** del cliente MCP por subprocess, y ese CLI corta la salida a **20.000 caracteres** (un guard de pantalla). | Toda nota grande se respaldaba cortada: la peor perdió **91%** de su contenido (228 KB → 20 KB). |
+| **Archivos omitidos** | Enumeraba el vault con el `list` del servidor MCP, que **solo devuelve `.md`**. | Los PDFs y las notas sin extensión nunca se respaldaban (2 PDFs + 2 notas). |
+
+Y una tercera, que solo apareció al arreglar las anteriores:
+
+| Falla | Causa raíz | Efecto |
+|---|---|---|
+| **Base64 sin decodificar** | Los archivos grandes llegan del MCP como **varios bloques base64 de 100 KiB concatenados**, cada uno con su propio padding. Un `b64decode` de una sola pasada falla con *"Excess data after padding"*. | El PDF se guardaba como texto base64, **33% más grande** y no restaurable como PDF. |
+
+### Reglas que salen de esto
+
+1. **Enumerá el vault desde CouchDB**, no desde el `list` del MCP: los documentos con `path` y sin
+   `deleted` son la lista autoritativa de archivos vivos (~140; el resto de los ~7.000 documentos son
+   bloques CRDT y tumbas de archivos movidos).
+2. **Leé con `read_note()` (importlib), nunca con el CLI**: el CLI es para humanos, trunca.
+3. **Decodificá base64 por bloques** cuando el archivo es binario.
+4. **Verificá en los dos sentidos.** Comparar solo "¿es más chico que el original?" deja pasar el
+   base64 sin decodificar (inflado). El chequeo es `|guardado - esperado| / esperado <= 10%`.
+5. **El script sale con código ≠ 0 si algo no cuadra.** Un backup que se autoverifica puede fallar
+   ruidosamente; uno que no, falla en silencio durante meses.
+6. **`host.docker.internal` solo resuelve dentro de Docker**: un script que corre en el host y lee el
+   `COUCHDB_URL` del contenedor tiene que traducirlo a `127.0.0.1`.
+
+### Cómo se verifica hoy
+
+```bash
+scripts/verify-vault.sh     # compara el último snapshot contra el vault vivo:
+                            # cantidad de archivos Y bytes totales (falla si difieren)
+python3 scripts/backup_obsidian_to_s3.py    # el backup, que se autoverifica al terminar
+```
+
+Antes, el chequeo era "¿hay al menos 1 nota?" — con eso, un backup al 48% pasaba como saludable.
+
+
 
 ## Historia / limpieza
 
