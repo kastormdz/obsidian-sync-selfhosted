@@ -1,0 +1,20 @@
+services:
+  obsidian-mcp:
+    # v0.6.5 pineado por digest — NO usar :latest.
+    # Actualizar: docker pull ghcr.io/es617/obsidian-sync-mcp:vX.Y.Z y sacar el digest con
+    #   docker image inspect <imagen> --format '{{index .RepoDigests 0}}'
+    image: ghcr.io/es617/obsidian-sync-mcp@sha256:eefc083ffee77a72d5f2002dd92a8b310a3c58703ac040a39691a2778570e124
+    container_name: obsidian-mcp
+    restart: unless-stopped
+    ports:
+      # Solo localhost: el cliente MCP corre en este mismo host.
+      # No hay motivo para exponerlo a la red.
+      - "127.0.0.1:8787:8787"
+    # Todos los secretos en .env (0600): URL, usuario no-admin, passphrase E2E y token.
+    env_file:
+      - .env
+    volumes:
+      # Guarda los tokens OAuth emitidos. Si lo borrás, hay que re-registrar el cliente.
+      - /srv/docker/obsidian-mcp/data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

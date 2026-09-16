@@ -1,0 +1,22 @@
+# Secretos — nunca commitear
+.env
+*.env
+!.env.example
+.secrets/
+
+# Datos locales
+data/
+couchdb/data/
+couchdb/etc/
+mcp-server/data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Backups y temporales
+*.bak
+*.bak.*
+*.tar.gz

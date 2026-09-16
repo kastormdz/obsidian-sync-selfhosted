@@ -1,0 +1,32 @@
+networks:
+  couchdb-net:
+    driver: bridge
+
+services:
+  couchdb:
+    # 3.5.2 pineado por digest — NO usar couchdb:3 (flota de versión sin avisar).
+    # Actualizar: docker pull couchdb:3.5.x y sacar el digest con
+    #   docker image inspect couchdb:3.5.x --format '{{index .RepoDigests 0}}'
+    image: couchdb@sha256:9ea24cbd76522fe845d1c32c7fd1dcfc8a3ba73dcc4817d62f8a7f7f1dfaffe3
+    container_name: couchdb
+    restart: unless-stopped
+    ports:
+      # Solo LAN: el acceso desde Internet va por el reverse proxy con TLS.
+      # Para atarlo a una interfaz puntual: "192.168.1.10:5984:5984"
+      - "5984:5984"
+    # Las credenciales viven en .env (0600), nunca en este archivo.
+    env_file:
+      - .env
+    volumes:
+      # Ojo: la ruta es relativa AL DIRECTORIO DE ESTE ARCHIVO, así que termina
+      # siendo ./couchdb/data (un nivel de más). Es el layout que usa el
+      # despliegue real; cambiarlo mueve los datos de lugar.
+      - ./couchdb/data:/opt/couchdb/data
+      - ./couchdb/etc:/opt/couchdb/etc/local.d
+    networks:
+      - couchdb-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5984/_up"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
