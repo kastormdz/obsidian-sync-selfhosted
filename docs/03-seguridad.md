@@ -118,6 +118,26 @@ Activo. Implicancias prácticas:
 
 El repo **no contiene ningún secreto**, ni en el árbol de trabajo ni en su historia de git.
 
+### Prevención: hook `sensitive-scan`
+
+Para que no vuelva a pasar por descuido, el repo trae un escáner que corre **antes de cada commit**:
+
+```bash
+scripts/sensitive-scan.sh --install        # activa el hook (core.hooksPath=.githooks)
+scripts/sensitive-scan.sh --update         # regenera los patrones de ESTA máquina
+scripts/sensitive-scan.sh --check --all    # escaneo completo, sin commitear
+scripts/sensitive-scan.sh --how            # qué detecta y cómo
+```
+
+Detecta claves (AWS/Garage/GitHub/OpenAI/Slack, privadas, JWT), credenciales en claro entre comillas,
+rutas `/home/<usuario>/` y **tus** identificadores (hostnames, dominios, IPs, usuario y email), que
+viven en `~/.config/git/sensitive-patterns` — **fuera del repo**, así el hook público no filtra lo
+que existe para protegerlo. El valor detectado se muestra enmascarado, para que el propio reporte no
+termine siendo la fuga.
+
+> Usá `192.0.2.0/24` (RFC 5737) en los ejemplos de IP: es el rango de documentación, nunca es una IP
+> real, y no dispara la regla de IP interna.
+
 ## 6. Mantenimiento pendiente
 
 - **Compactación.** La base nunca se compactó (`compact_running: false`, `purge_seq: 0`). El historial

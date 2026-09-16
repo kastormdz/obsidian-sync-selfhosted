@@ -67,6 +67,8 @@ El error más común: `.env` ausente o sin `COUCHDB_URL`, porque el compose usa 
 | Recrear/verificar el MCP | `scripts/obsidian-mcp-recreate.sh apply \| verify \| rollback` |
 | Ver/restaurar CORS | `couchdb/init-cors.sh status \| apply \| restore` |
 | Backup manual | `python3 scripts/backup_obsidian_to_s3.py` |
+| Revisar qué se va a publicar | `scripts/sensitive-scan.sh --check --all` |
+| Regenerar patrones personales | `scripts/sensitive-scan.sh --update` |
 
 ## Procedimiento de restore (vault perdido)
 
