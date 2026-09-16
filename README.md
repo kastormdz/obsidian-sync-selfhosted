@@ -65,6 +65,7 @@ Sincronización en tiempo real de un vault de Obsidian, auto-gestionada: **Couch
 | [docs/05-cliente-rag.md](docs/05-cliente-rag.md) | Cliente MCP, pipeline RAG, límites y bugs conocidos |
 | [docs/06-backups.md](docs/06-backups.md) | Qué se respalda, dónde, retención y **restore** |
 | [docs/07-runbook.md](docs/07-runbook.md) | Verificación rápida y troubleshooting |
+| [docs/08-implementacion-para-agentes.md](docs/08-implementacion-para-agentes.md) | **Para agentes de IA:** orden de implementación, invariantes y trampas conocidas |
 
 ## Inicio rápido
 
