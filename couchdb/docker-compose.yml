@@ -12,7 +12,9 @@ services:
     restart: unless-stopped
     ports:
       # Solo LAN: el acceso desde Internet va por el reverse proxy con TLS.
-      # Para atarlo a una interfaz puntual: "192.168.1.10:5984:5984"
+      # Para atarlo a una interfaz puntual: "192.0.2.10:5984:5984"
+      # (192.0.2.0/24 es el rango reservado para documentación, RFC 5737: nunca
+      #  es una IP real, así que no filtra la topología de nadie.)
       - "5984:5984"
     # Las credenciales viven en .env (0600), nunca en este archivo.
     env_file:

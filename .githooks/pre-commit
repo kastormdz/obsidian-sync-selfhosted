@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Instalado por scripts/sensitive-scan.sh --install
+# La lógica vive en el script (un solo lugar, testeable).
+exec "$(git rev-parse --show-toplevel)/scripts/sensitive-scan.sh" --check --staged
