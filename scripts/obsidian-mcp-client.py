@@ -581,6 +581,80 @@ def list_tags() -> str:
     return ""
 
 
+_META_CACHE: Any = None
+_META_TTL = 300
+
+
+def _meta_cache() -> Any:
+    """Conexion SQLite de la cache de metadata (misma base que los embeddings)."""
+    global _META_CACHE
+    if _META_CACHE is None:
+        try:
+            import sqlite3
+
+            ruta = os.path.expanduser("~/.hermes/cache/obsidian-embeddings.db")
+            os.makedirs(os.path.dirname(ruta), exist_ok=True)
+            conn = sqlite3.connect(ruta, timeout=10)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS note_meta (n TEXT PRIMARY KEY, ts REAL, meta TEXT)"
+            )
+            conn.commit()
+            _META_CACHE = conn
+        except Exception as e:
+            logger.warning("cache de metadata no disponible (%s): se pide al server", e)
+            _META_CACHE = False
+    return _META_CACHE
+
+
+def _note_meta_for(name: str, ttl: int = _META_TTL) -> dict[str, Any]:
+    """size/mtime de una nota, con cache en disco de TTL corto.
+
+    El RAG pedia metadata de sus ~60 notas candidatas en CADA consulta: 60 round-trips
+    al server (~2s de los 4.2s totales). El TTL es corto a proposito: esto alimenta un
+    boost heuristico, no una decision dura — unos minutos de atraso no cambian la
+    respuesta. Si la cache falla, se pide al server como antes.
+    """
+    import json
+
+    conn = _meta_cache()
+    if conn:
+        try:
+            fila = conn.execute("SELECT ts, meta FROM note_meta WHERE n = ?", (name,)).fetchone()
+            if fila and (time.time() - fila[0]) < ttl:
+                return dict(json.loads(fila[1]))
+        except Exception:
+            pass
+
+    meta: dict[str, Any] = {}
+    try:
+        meta_str = get_note_metadata(name)
+        for line in meta_str.split("\n"):
+            if "Size:" in line:
+                parts = line.split(":", 1)
+                if len(parts) > 1:
+                    meta["size"] = parts[1].strip()
+            if "Modified:" in line:
+                parts = line.split(":", 1)
+                if len(parts) > 1:
+                    mtime_raw = parts[1].strip()
+                    # Strip timezone offset for strptime compat
+                    meta["mtime"] = mtime_raw[:19] if len(mtime_raw) > 19 else mtime_raw
+    except Exception:
+        pass
+
+    if conn:
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO note_meta (n, ts, meta) VALUES (?, ?, ?)",
+                (name, time.time(), json.dumps(meta)),
+            )
+            conn.commit()
+        except Exception:
+            pass
+    return meta
+
+
 def get_note_metadata(path: str) -> str:
     """
     Retrieve metadata (frontmatter, tags, backlinks) for a note.
@@ -1482,23 +1556,7 @@ def rag_improved(
             continue
 
         # Fetch metadata for enriched ranking
-        meta: dict[str, Any] = {}
-        if use_boost:
-            try:
-                meta_str = get_note_metadata(n["name"])
-                for line in meta_str.split("\n"):
-                    if "Size:" in line:
-                        parts = line.split(":", 1)
-                        if len(parts) > 1:
-                            meta["size"] = parts[1].strip()
-                    if "Modified:" in line:
-                        parts = line.split(":", 1)
-                        if len(parts) > 1:
-                            mtime_raw = parts[1].strip()
-                            # Strip timezone offset for strptime compat
-                            meta["mtime"] = mtime_raw[:19] if len(mtime_raw) > 19 else mtime_raw
-            except Exception:
-                pass
+        meta: dict[str, Any] = _note_meta_for(n["name"]) if use_boost else {}
         note_meta_cache[n["name"]] = meta
 
         note_chunks = _chunk_semantic(note_content)
