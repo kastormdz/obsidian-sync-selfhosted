@@ -1075,6 +1075,34 @@ class _EmbeddingBackend:
             return None
 
     @classmethod
+    def _cache_get_many(cls, hashes: list) -> list:
+        """Lectura en bloque de la cache: 2811 SELECT de a uno costaban ~1s por consulta.
+
+        Los hashes repetidos (chunks identicos en notas distintas) se resuelven todos.
+        """
+        out: list = [None] * len(hashes)
+        conn = cls._cache()
+        if not conn or not hashes:
+            return out
+        try:
+            import numpy as np
+
+            idx: dict = {}
+            for i, h in enumerate(hashes):
+                idx.setdefault(h, []).append(i)
+            unicos = list(idx)
+            for i in range(0, len(unicos), 500):
+                lote = unicos[i : i + 500]
+                q = "SELECT h, dim, v FROM emb WHERE h IN (%s)" % ",".join("?" * len(lote))
+                for h, dim, v in conn.execute(q, lote):
+                    vec = np.frombuffer(v, dtype="float32").reshape(dim)
+                    for pos in idx[h]:
+                        out[pos] = vec
+            return out
+        except Exception:
+            return [None] * len(hashes)
+
+    @classmethod
     def _cache_put(cls, items: list) -> None:
         conn = cls._cache()
         if not conn or not items:
@@ -1146,7 +1174,7 @@ class _EmbeddingBackend:
             import numpy as np
 
             hashes = [hashlib.sha256(x.encode("utf-8", "ignore")).hexdigest() for x in texts]
-            vectores: list[Any] = [cls._cache_get(h) for h in hashes]
+            vectores: list[Any] = cls._cache_get_many(hashes)
             faltantes = [(i, x) for i, (v, x) in enumerate(zip(vectores, texts)) if v is None]
             if faltantes:
                 nuevos = [np.asarray(v, dtype="float32") for v in m.embed([x for _, x in faltantes])]
