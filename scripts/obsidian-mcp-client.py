@@ -1024,36 +1024,107 @@ def _expand_query(query: str) -> list[str]:
 
 class _EmbeddingBackend:
     """
-    Lazy-load wrapper for sentence-transformers.
-    Gracefully degrades to TF-IDF-only if the library is not installed.
+    Lazy-load wrapper for embeddings: prefiere fastembed (ONNX, sin torch) y cae a
+    sentence-transformers si esta. Degrada a TF-IDF solo si faltan las dos — y avisa
+    en WARNING: un modo degradado silencioso es indistinguible de "todo bien".
     Model: paraphrase-multilingual-MiniLM-L12-v2
     """
 
     _model: Any = None
+    _backend: Optional[str] = None
     _available: Optional[bool] = None
+    _cache_conn: Any = None
+
+    @classmethod
+    def _cache(cls) -> Any:
+        """Cache persistente chunk->vector (SQLite, stdlib).
+
+        Sin esto el RAG re-codifica TODOS los chunks del vault en cada consulta:
+        ~88s por pregunta en CPU. Con cache solo se codifica lo nuevo o cambiado,
+        asi que una edicion de nota re-codifica unicamente esa nota.
+        """
+        if cls._cache_conn is None:
+            try:
+                import sqlite3
+
+                ruta = os.path.expanduser("~/.hermes/cache/obsidian-embeddings.db")
+                os.makedirs(os.path.dirname(ruta), exist_ok=True)
+                conn = sqlite3.connect(ruta, timeout=10)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS emb (h TEXT PRIMARY KEY, dim INTEGER, v BLOB)"
+                )
+                conn.commit()
+                cls._cache_conn = conn
+            except Exception as e:  # cache rota o sin permisos: seguir sin cache, no romper
+                logger.warning("cache de embeddings no disponible (%s): se codifica todo", e)
+                cls._cache_conn = False
+        return cls._cache_conn
+
+    @classmethod
+    def _cache_get(cls, h: str) -> Any:
+        conn = cls._cache()
+        if not conn:
+            return None
+        try:
+            import numpy as np
+
+            fila = conn.execute("SELECT dim, v FROM emb WHERE h = ?", (h,)).fetchone()
+            return None if not fila else np.frombuffer(fila[1], dtype="float32").reshape(fila[0])
+        except Exception:
+            return None
+
+    @classmethod
+    def _cache_put(cls, items: list) -> None:
+        conn = cls._cache()
+        if not conn or not items:
+            return
+        try:
+            conn.executemany(
+                "INSERT OR REPLACE INTO emb (h, dim, v) VALUES (?, ?, ?)",
+                [(h, v.shape[0], v.astype("float32").tobytes()) for h, v in items],
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("no se pudo guardar en la cache de embeddings: %s", e)
+    _MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
     @classmethod
     def available(cls) -> bool:
         """Return True if sentence-transformers can be imported."""
         if cls._available is None:
             try:
-                importlib.import_module("sentence_transformers")
+                importlib.import_module("fastembed")
+                cls._backend = "fastembed"
                 cls._available = True
             except ImportError:
-                cls._available = False
-                logger.info("sentence-transformers no disponible → solo TF-IDF")
+                try:
+                    importlib.import_module("sentence_transformers")
+                    cls._backend = "sentence_transformers"
+                    cls._available = True
+                except ImportError:
+                    cls._available = False
+                    logger.warning(
+                        "Sin motor de embeddings (fastembed / sentence-transformers): "
+                        "la busqueda semantica queda APAGADA, solo TF-IDF"
+                    )
         return cls._available  # type: ignore[return-value]
 
     @classmethod
     def model(cls) -> Any:
         """Return the loaded SentenceTransformer model, loading it if necessary."""
         if cls._model is None and cls.available():
-            from sentence_transformers import SentenceTransformer  # type: ignore[import]
+            if cls._backend == "fastembed":
+                from fastembed import TextEmbedding  # type: ignore[import]
 
-            cls._model = SentenceTransformer(
-                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-                device="cpu",
-            )
+                os.environ.setdefault(
+                    "FASTEMBED_CACHE_PATH", os.path.expanduser("~/.hermes/cache/fastembed")
+                )
+                cls._model = TextEmbedding(model_name=cls._MODEL)
+            else:
+                from sentence_transformers import SentenceTransformer  # type: ignore[import]
+
+                cls._model = SentenceTransformer(cls._MODEL, device="cpu")
         return cls._model
 
     @classmethod
@@ -1070,6 +1141,19 @@ class _EmbeddingBackend:
         m = cls.model()
         if m is None:
             return None
+        if cls._backend == "fastembed":
+            import hashlib
+            import numpy as np
+
+            hashes = [hashlib.sha256(x.encode("utf-8", "ignore")).hexdigest() for x in texts]
+            vectores: list[Any] = [cls._cache_get(h) for h in hashes]
+            faltantes = [(i, x) for i, (v, x) in enumerate(zip(vectores, texts)) if v is None]
+            if faltantes:
+                nuevos = [np.asarray(v, dtype="float32") for v in m.embed([x for _, x in faltantes])]
+                cls._cache_put([(hashes[i], v) for (i, _), v in zip(faltantes, nuevos)])
+                for (i, _), v in zip(faltantes, nuevos):
+                    vectores[i] = v
+            return np.asarray(vectores, dtype="float32")
         return m.encode(
             texts,
             batch_size=min(len(texts), 32),
@@ -1084,7 +1168,7 @@ def _score_hybrid(
 ) -> list[dict[str, Any]]:
     """
     Hybrid scoring: alpha * TF-IDF + (1 - alpha) * cosine(sentence embeddings).
-    Falls back to alpha=1.0 (pure TF-IDF) if sentence-transformers is unavailable.
+    Falls back to alpha=1.0 (pure TF-IDF) if no embedding engine is available.
 
     Args:
         query: Search query.
