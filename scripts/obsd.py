@@ -89,6 +89,7 @@ class Handler(socketserver.StreamRequestHandler):
         if not line:
             return
         rid = None
+        req: dict = {}
         try:
             req = json.loads(line)
             rid = req.get("id")
@@ -105,7 +106,27 @@ class Handler(socketserver.StreamRequestHandler):
                     result = getattr(m, cmd)(**args)
             resp = {"id": rid, "ok": True, "result": result}
         except Exception as exc:
-            resp = {"id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            # El server MCP cierra la sesión SSE por inactividad
+            # (httpx2.ReadTimeout → "SSE error, reconectando: Connection
+            # closed"). El pool del cliente reconecta sola, pero la PRIMERA
+            # llamada tras el corte falla. Reintentar una vez convierte un
+            # error visible en un éxito transparente — sin esto, la mitad de
+            # las operaciones de consolidation fallan con "Connection closed".
+            err = f"{type(exc).__name__}: {exc}"
+            if ("Connection closed" in err or "ReadTimeout" in err
+                    or "BrokenResource" in err) and not req.get("_reintento"):
+                req["_reintento"] = True
+                try:
+                    with _lock:
+                        m = load_client()
+                        result = getattr(m, cmd)(**args) if cmd != "rag_search" \
+                            else load_index().search(args["query"], args.get("k", 5))
+                    resp = {"id": rid, "ok": True, "result": result}
+                except Exception as exc2:
+                    resp = {"id": rid, "ok": False,
+                            "error": f"{type(exc2).__name__}: {exc2}"}
+            else:
+                resp = {"id": rid, "ok": False, "error": err}
         try:
             self.wfile.write((json.dumps(resp, ensure_ascii=False) + "\n").encode())
         except BrokenPipeError:

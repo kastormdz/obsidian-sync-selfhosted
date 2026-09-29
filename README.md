@@ -51,6 +51,8 @@ Sincronización en tiempo real de un vault de Obsidian, auto-gestionada: **Couch
 | Cliente MCP + RAG | `scripts/obsidian-mcp-client.py` | CRUD + RAG híbrido local |
 | **Daemon MCP** | `scripts/obsd.py` | Sesión SSE abierta: **0.03s** por operación |
 | **Índice local** | `scripts/obsidian-index.py` | Chunks + embeddings en SQLite: **RAG en ~0.2s** |
+| **Grafo** | `scripts/obsidian-graph.py` | Auditoría de wikilinks (huérfanas, islas, rotos) |
+| **Linkeo** | `scripts/obsidian-link.py` | Wikilinks sugeridos por los embeddings del índice |
 | Proxy reverso | NPM Plus | TLS para dispositivos remotos |
 | Almacenamiento | Garage S3 | Respaldos fuera del server |
 | Backups | `scripts/backup_obsidian_to_s3.py` | Export diario del vault |
@@ -86,6 +88,24 @@ obsc.rag("mi consulta", 5)          # semántico, sobre el índice local
 > `docs/09-rendimiento-cliente.md` tiene la medición completa, los patrones de
 > fallo del protocolo SSE y las trampas del ranking.
 
+## El grafo de notas
+
+Un RAG recupera por similitud pero **no acumula relaciones**. Medido sobre 152
+notas: 26 linkeaban (17%), 116 eran islas, y había **120 componentes conexas para
+152 notas** — o sea, no había grafo.
+
+`obsidian-graph.py` lo audita; `obsidian-link.py` propone los links que faltan
+usando los embeddings que el índice ya tiene. Resultado tras aplicarlo: **46% de
+notas linkeadas, 72 componentes, 162 aristas** (×3.5).
+
+```bash
+python3 scripts/obsidian-graph.py --stats     # salud del grafo en una línea
+python3 scripts/obsidian-link.py --propose    # qué links faltarían
+```
+
+> `docs/10-grafo-de-notas.md` tiene la medición completa y por qué las carpetas de
+> listas (cheatsheets, listas de palabras) **deben** quedarse al 0%.
+
 ## Documentación
 
 | Doc | Contenido |
@@ -99,6 +119,7 @@ obsc.rag("mi consulta", 5)          # semántico, sobre el índice local
 | [docs/07-runbook.md](docs/07-runbook.md) | Verificación rápida y troubleshooting |
 | [docs/08-implementacion-para-agentes.md](docs/08-implementacion-para-agentes.md) | **Para agentes de IA:** orden de implementación, invariantes y trampas conocidas |
 | [docs/09-rendimiento-cliente.md](docs/09-rendimiento-cliente.md) | **Rendimiento:** daemon, índice local, trampas de SSE y de ranking |
+| [docs/10-grafo-de-notas.md](docs/10-grafo-de-notas.md) | **Grafo:** auditoría de wikilinks y linkeo automático por embeddings |
 
 ## Inicio rápido
 
