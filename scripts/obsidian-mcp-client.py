@@ -150,6 +150,29 @@ def _parse_form_fields(html: str) -> dict[str, str]:
     return parser.fields
 
 
+def _oauth_save() -> None:
+    """Persistir cid/csec/token a disco (0600).
+
+    Sin esto, CADA proceso paga el flujo PKCE completo (~0.85s) y —peor—
+    cada reconexión SSE dispara un OAuth handshake nuevo, porque el token
+    solo vivía en memoria. El server lo delata en sus logs:
+        Auth: /oauth/authorize ... /oauth/token ... session established  (×N)
+    """
+    try:
+        payload = {
+            "cid": _oauth["cid"],
+            "csec": _oauth["csec"],
+            "token": _oauth["token"] or "",
+        }
+        tmp = _OAUTH_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(payload, fh)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _OAUTH_FILE)
+    except Exception as exc:
+        logger.warning("No se pudo guardar el token OAuth: %s", exc)
+
+
 def _auth() -> str:
     """Return a valid OAuth access token, running PKCE flow if needed."""
     if _oauth["token"]:
@@ -162,6 +185,10 @@ def _auth() -> str:
                 saved = json.load(f)
                 _oauth["cid"] = saved["cid"]
                 _oauth["csec"] = saved["csec"]
+                # Token cacheado en disco: evita el PKCE completo por proceso.
+                # Si el server lo revocó, la llamada fallará y se reintenta
+                # limpiando el token (ver _invalidate_token).
+                _oauth["token"] = saved.get("token") or None
         except Exception as exc:
             logger.warning("No se pudieron cargar credenciales OAuth: %s", exc)
 
@@ -232,6 +259,7 @@ def _auth() -> str:
         timeout=5,
     )
     _oauth["token"] = r3.json()["access_token"]
+    _oauth_save()
     return _oauth["token"]  # type: ignore[return-value]
 
 
@@ -1387,14 +1415,29 @@ def _boost_score(
 
 async def _read_notes_batch(
     note_names: list[str],
-    concurrency: int = 10,
+    concurrency: int = 1,
 ) -> dict[str, str]:
     """
-    Read N notes in parallel, bounded by a semaphore.
+    Read N notes, bounded by a semaphore.
+
+    concurrency=1 POR DEFECTO, y no por descuido. MCP sobre SSE es UN request
+    por stream: varias llamadas concurrentes sobre la misma sesión cruzan sus
+    respuestas y la conexión se rompe (anyio.BrokenResourceError). Medido en
+    2026-09-29 sobre el vault real (155 notas):
+        60 notas  conc=10 → 0.35s  ✅
+        100 notas conc=10 → 0.62s  ✅
+        130 notas conc=10 → HANG (>65s, 1s de CPU)  ← la sesión se rompe
+    Y cada rotura dispara _disconnect() → _connect() → un OAuth PKCE completo
+    (~0.85s), que es lo que convertiría esto en minutos.
+
+    Serializado da 155 notas en ~0.9s. Si algún día hace falta paralelismo real,
+    tiene que ser con POOL DE N SESIONES SSE independientes — nunca N llamadas
+    sobre la misma sesión.
 
     Args:
         note_names: List of vault-relative note paths to read.
-        concurrency: Maximum parallel reads (default 10).
+        concurrency: Máximo de lecturas simultáneas sobre la MISMA sesión.
+                     >1 es inseguro salvo que sepas lo que hacés.
 
     Returns:
         Dict mapping note name → full content string.

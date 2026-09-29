@@ -49,10 +49,42 @@ Sincronización en tiempo real de un vault de Obsidian, auto-gestionada: **Couch
 | Base de datos | `couchdb@sha256:9ea24cbd…` (3.5.2) | Replicación multimaster + CRDT |
 | Servidor MCP | `ghcr.io/es617/obsidian-sync-mcp@sha256:eefc083f…` (v0.6.5) | Tools MCP sobre el vault |
 | Cliente MCP + RAG | `scripts/obsidian-mcp-client.py` | CRUD + RAG híbrido local |
+| **Daemon MCP** | `scripts/obsd.py` | Sesión SSE abierta: **0.03s** por operación |
+| **Índice local** | `scripts/obsidian-index.py` | Chunks + embeddings en SQLite: **RAG en ~0.2s** |
 | Proxy reverso | NPM Plus | TLS para dispositivos remotos |
 | Almacenamiento | Garage S3 | Respaldos fuera del server |
 | Backups | `scripts/backup_obsidian_to_s3.py` | Export diario del vault |
 | Verificación | `scripts/verify-vault.sh` | Healthcheck end-to-end |
+
+## Rendimiento del cliente (medido 2026-09-29, vault de 155 notas)
+
+El mayor cuello de botella **no era el vault**: era el arranque de proceso.
+
+| operación | proceso nuevo | con daemon |
+|---|---|---|
+| escribir nota | 0.85s | **0.069s** |
+| escribir 50 KB | — | **0.066s** |
+| leer / metadata | 0.85s | **0.04s** |
+| **RAG semántico** | **>420s** | **0.2s** |
+
+- **`obsd.py`** mantiene la sesión SSE abierta y el modelo de embeddings
+  cargado en memoria, y expone un **socket Unix** (`0600`, nunca TCP) con lista
+  blanca de tools. Autostart en el primer uso.
+- **`obsidian-index.py`** mantiene los chunks y sus embeddings en SQLite. El RAG
+  deja de hablar con el server y consulta local. Reindex incremental por
+  **hash del contenido**.
+
+Uso típico:
+
+```python
+import sys; sys.path.insert(0, "ruta/a/scripts")
+import obsc
+obsc.call("write_note", {"path": "carpeta/nota.md", "content": contenido})
+obsc.rag("mi consulta", 5)          # semántico, sobre el índice local
+```
+
+> `docs/09-rendimiento-cliente.md` tiene la medición completa, los patrones de
+> fallo del protocolo SSE y las trampas del ranking.
 
 ## Documentación
 
@@ -66,6 +98,7 @@ Sincronización en tiempo real de un vault de Obsidian, auto-gestionada: **Couch
 | [docs/06-backups.md](docs/06-backups.md) | Qué se respalda, dónde, retención y **restore** |
 | [docs/07-runbook.md](docs/07-runbook.md) | Verificación rápida y troubleshooting |
 | [docs/08-implementacion-para-agentes.md](docs/08-implementacion-para-agentes.md) | **Para agentes de IA:** orden de implementación, invariantes y trampas conocidas |
+| [docs/09-rendimiento-cliente.md](docs/09-rendimiento-cliente.md) | **Rendimiento:** daemon, índice local, trampas de SSE y de ranking |
 
 ## Inicio rápido
 
